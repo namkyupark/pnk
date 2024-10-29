@@ -1,0 +1,925 @@
+/*
+	SQL Tuning 심화	
+*/
+
+-- 2028/10/28
+
+putty 131.186.18.207
+	- mysql12/mysql
+
+cdsp
+	/home/mysql12/node1/scripts
+
+sh startup.sh
+
+sh conn.sh
+	- pass : mysql
+
+show databases
+
+create database test;
+
+source /media/test2.sql
+use test
+
+show tables;
+
+-- 실행계획 - 예측 row 출력 ( explain )
+explain select * from employees where emp_no  between 10001 and 20000;
+
++----+-------------+-----------+------------+-------+---------------+---------+---------+------+-------+----------+-------------+
+| id | select_type | table     | partitions | type  | possible_keys | key     | key_len | ref  | rows  | filtered | Extra       |
++----+-------------+-----------+------------+-------+---------------+---------+---------+------+-------+----------+-------------+
+|  1 | SIMPLE      | employees | NULL       | range | PRIMARY       | PRIMARY | 4       | NULL | 19158 |   100.00 | Using where |
++----+-------------+-----------+------------+-------+---------------+---------+---------+------+-------+----------+-------------+
+
+
+-- 실행계획 - 실제 row 출력 ( explain analyze - cost, actual rows 확인 )
+explain analyze select * from employees where emp_no  between 10001 and 20000;
+
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| EXPLAIN                                                                                                                                                                                                                                                                                     |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| -> Filter: (employees.emp_no between 10001 and 20000)  (cost=3836.99 rows=19158) (actual time=0.018..4.106 rows=10000 loops=1)
+    -> Index range scan on employees using PRIMARY over (10001 <= emp_no <= 20000)  (cost=3836.99 rows=19158) (actual time=0.016..3.380 rows=10000 loops=1)
+|
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+
+
+-- index 리스트 출력
+show index from employees
+
+-- 테이블 컬럼 내용 출력
+desc employees
+
+
+-- data type 확인 예제 ( index -> ref )
+
+-- 순자 > 문자 우선순위로 to_number(use_yn) 
+mysql> explain  select count(1) from salaries where use_yn = 1;
++----+-------------+----------+------------+-------+---------------+----------+---------+------+---------+----------+--------------------------+
+| id | select_type | table    | partitions | type  | possible_keys | key      | key_len | ref  | rows    | filtered | Extra                    |
++----+-------------+----------+------------+-------+---------------+----------+---------+------+---------+----------+--------------------------+
+|  1 | SIMPLE      | salaries | NULL       | index | I_use_yn      | I_use_yn | 4       | NULL | 2568134 |    10.00 | Using where; Using index |
++----+-------------+----------+------------+-------+---------------+----------+---------+------+---------+----------+--------------------------+
+1 row in set, 3 warnings (0.00 sec)
+
+mysql> explain  select count(1) from salaries where use_yn = '1';
++----+-------------+----------+------------+------+---------------+----------+---------+-------+-------+----------+-------------+
+| id | select_type | table    | partitions | type | possible_keys | key      | key_len | ref   | rows  | filtered | Extra       |
++----+-------------+----------+------------+------+---------------+----------+---------+-------+-------+----------+-------------+
+|  1 | SIMPLE      | salaries | NULL       | ref  | I_use_yn      | I_use_yn | 4       | const | 82824 |   100.00 | Using index |
++----+-------------+----------+------------+------+---------------+----------+---------+-------+-------+----------+-------------+
+1 row in set, 1 warning (0.00 sec)
+
+
+-- UNION , UNION ALL의 차이 비교
+SELECT 'M' AS gender, emp_no FROM employees
+ WHERE gender = 'M' AND last_name ='Baba'
+ UNION 
+SELECT 'F', emp_no FROM employees
+ WHERE gender = 'F' AND last_name = 'Baba';
+
+SELECT 'M' AS gender, emp_no FROM employees
+ WHERE gender = 'M' AND last_name ='Baba'
+ UNION ALL
+SELECT 'F', emp_no FROM employees
+ WHERE gender = 'F' AND last_name = 'Baba';
+
+
+
+-- date 타입 비교
+explain  select emp_no from employees where hire_date >= '1999-01-01' and  hire_date <= '1999-12-31'  and emp_no > 100000;
+ 
+explain select emp_no from employees where hire_date like '1999%' and emp_no > 100000;
+
+
+SELECT de.emp_no, departments.dept_no
+FROM dept_emp de, departments
+WHERE de.dept_no = departments.dept_no AND de.from_date >= '2002-03-01';
+
+-- subquery ( DEPENDENT SUBQUERY )
+SELECT employees.emp_no, employees.first_name, employees.last_name
+  FROM employees
+ WHERE emp_no > 450000
+   AND ( SELECT MAX(salary)  FROM salaries
+          WHERE emp_no = employees.emp_no) > 100000;
+
+
+
+select 
+  from ( select emp_no, max(salary) salary from salaries group by emp_no ) sa, employees
+ where employees.emp_no> 45000
+   and sa.salary > 100000;
+         
+
+
+
+=========================================================
+					ORACLE
+=========================================================
+
+
+131.186.30.235
+서비스명 : pdb2.orclpub.orcl.oraclevcn.com
+포트 : 1521
+
+scott12/oracleSQL19##
+
+
+## INLINE_VIEW 사용 방법 ##
+	- 옵티마이저가 기본은 MERGE 로 풀려고 함
+
+-- MERGE : JOIN
+SELECT /*+ gether_plan_statistics */ e.*
+  FROM employees e,
+       (SELECT /*+ MERGE */ 
+               department_id, AVG (salary) salary
+          FROM employees
+         GROUP BY department_id) avg
+ WHERE e.department_id = avg.department_id
+   AND e.salary >= avg.salary
+   AND e.job_id = 'HR_REP' ;
+
+select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));
+
+
+-- NO_MERGE : VIEW로 유지
+SELECT /*+ gether_plan_statistics */ e.*
+  FROM employees e,
+       (SELECT /*+ NO_MERGE */ 
+               department_id, AVG (salary) salary
+          FROM employees
+         GROUP BY department_id) avg
+ WHERE e.department_id = avg.department_id
+   AND e.salary >= avg.salary
+   AND e.job_id = 'HR_REP' ;
+
+
+SELECT /*+ gether_plan_statistics no_merge(avg)*/ e.*
+  FROM employees e,
+       (SELECT /* NO_MERGE */ 
+               department_id, AVG (salary) salary
+          FROM employees
+         GROUP BY department_id) avg
+ WHERE e.department_id = avg.department_id
+   AND e.salary >= avg.salary
+   AND e.job_id = 'HR_REP' ;
+
+
+
+
+-- JPPD
+SELECT /*+ gather_plan_statistics */ *
+  FROM DEPT D, (SELECT EMPNO, ENAME, DEPTNO FROM EMP) E
+ WHERE E.DEPTNO(+) = D.DEPTNO 
+   AND D.LOC = 'CHICAGO';
+   
+select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));
+
+
+-- 먼저 집합처리 후 조인하여 성능 개선
+SELECT /*+ gather_plan_statistics */
+        B.PRDT_CD, 
+        B.PRDT_NM,
+        A.SALE_CNT, 
+        A.SALE_AMT
+FROM ( SELECT /*+ NO_MERGE */
+              PRDT_CD, SUM(SALE_CNT) SALE_CNT, SUM(SALE_AMT) SALE_AMT 
+         FROM TB_PRDT_SALE_DAY 
+        WHERE SALE_DT BETWEEN '20140101' AND '20151231' 
+        GROUP BY PRDT_CD ) A,
+     TB_PRDT B
+WHERE A.PRDT_CD = B.PRDT_CD;
+
+select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));
+
+
+-- query block 을 명확히 기술하면 view 안의 조인 순서 조절 가능 )
+-- advanced 추가하면 query block  확인 가능
+SELECT /*+ gather_plan_statistics leading(E@SEL$1 C@SEL$2 L@SEL$2 D@SEL$2) */ 
+          e.employee_id
+        , e.first_name
+        , e.last_name
+        , e.job_id
+        , v.department_name
+  FROM employees e, v_dept v
+ WHERE e.department_id = v.department_id
+   AND v.department_name = 'Shipping'
+   AND v.postal_code = '99236'
+   AND v.region_id = 2
+   AND e.job_id = 'ST_CLERK'; 
+
+ select * from table(dbms_xplan.display_cursor(format=>'advanced ALLSTATS LAST'));
+ 
+ 
+-- view 하나 안에서만 조정할 경우에는 아래와 같이 가능
+SELECT /*+ gather_plan_statistics leading(v.c v.l v.d) */ 
+          e.employee_id
+        , e.first_name
+        , e.last_name
+        , e.job_id
+        , v.department_name
+  FROM employees e, v_dept v
+ WHERE e.department_id = v.department_id
+   AND v.department_name = 'Shipping'
+   AND v.postal_code = '99236'
+   AND v.region_id = 2
+   AND e.job_id = 'ST_CLERK'; 
+
+ select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST')); 
+ 
+ 
+===============================
+			2일차
+===============================	
+
+-- Lateral Inline Views 
+	12c 부터 inline view 내에서 Main 쿼리 테이블의 컬럼과 조인이 가능해짐
+
+select *
+  from emp e,
+        lateral(select * from dept d
+                where e.deptno = d.deptno);
+				
+
+set pages 0
+
+select  /*+ gather_plan_statistics */ 
+        max(a.suju_no),
+        substr(max(a.suju_no),1,9)||to_number(substr(max(a.suju_no),10,6)+1)
+  from s_suju_dtl a, s_suju b
+ where b.jumun_dt like '2007%' 
+   and a.suju_no = b.suju_no;
+   
+ select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));
+   
+
+TC0413209800001 TC0413209800002                                  
+
+
+SQL_ID  gaa16v56gm15k, child number 0
+-------------------------------------
+select  /*+ gather_plan_statistics  */          max(a.suju_no),         
+substr(max(a.suju_no),1,9)||to_number(substr(max(a.suju_no),10,6)+1)   
+from s_suju_dtl a, s_suju b  where b.jumun_dt like '2007%'     and 
+a.suju_no = b.suju_no
+ 
+Plan hash value: 340142201
+ 
+--------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                     | Name            | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+--------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT              |                 |      1 |        |      1 |00:00:00.29 |   15790 |       |       |          |
+|   1 |  SORT AGGREGATE               |                 |      1 |      1 |      1 |00:00:00.29 |   15790 |       |       |          |
+|*  2 |   HASH JOIN                   |                 |      1 |    129K|  16832 |00:00:00.43 |   15790 |  1572K|  1572K| 2578K (0)|
+|   3 |    TABLE ACCESS BY INDEX ROWID| S_SUJU          |      1 |  26038 |   2891 |00:00:00.01 |     242 |       |       |          |
+|*  4 |     INDEX RANGE SCAN          | I_SUJU_JUMUN_DT |      1 |  26038 |   2891 |00:00:00.01 |      11 |       |       |          |
+|   5 |    INDEX FAST FULL SCAN       | PK_T_SUJU_DTL   |      1 |   4136K|   4136K|00:00:00.23 |   15548 |       |       |          |
+--------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   2 - access("A"."SUJU_NO"="B"."SUJU_NO")
+   4 - access("B"."JUMUN_DT" LIKE '2007%')
+       filter("B"."JUMUN_DT" LIKE '2007%')
+ 
+
+27개 행이 선택되었습니다. 
+
+
+
+-- NL로 변경
+select  /*+ gather_plan_statistics use_nl(b a) */ 
+        max(a.suju_no),
+        substr(max(a.suju_no),1,9)||to_number(substr(max(a.suju_no),10,6)+1)
+  from s_suju_dtl a, s_suju b
+ where b.jumun_dt like '2007%' 
+   and a.suju_no = b.suju_no;
+   
+   
+TC0413209800001 TC0413209800002                                  
+
+
+SQL_ID  cfza6a7154s65, child number 0
+-------------------------------------
+select  /*+ gather_plan_statistics use_nl(b a) */          
+max(a.suju_no),         substr(max(a.suju_no),1,9)||to_number(substr(max
+(a.suju_no),10,6)+1)   from s_suju_dtl a, s_suju b  where b.jumun_dt 
+like '2007%'     and a.suju_no = b.suju_no
+ 
+Plan hash value: 2012162307
+ 
+-----------------------------------------------------------------------------------------------------------
+| Id  | Operation                     | Name            | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+-----------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT              |                 |      1 |        |      1 |00:00:00.01 |    6027 |
+|   1 |  SORT AGGREGATE               |                 |      1 |      1 |      1 |00:00:00.01 |    6027 |
+|   2 |   NESTED LOOPS                |                 |      1 |    129K|   2891 |00:00:00.01 |    6027 |
+|   3 |    TABLE ACCESS BY INDEX ROWID| S_SUJU          |      1 |  26038 |   2891 |00:00:00.01 |     242 |
+|*  4 |     INDEX RANGE SCAN          | I_SUJU_JUMUN_DT |      1 |  26038 |   2891 |00:00:00.01 |      11 |
+|   5 |    FIRST ROW                  |                 |   2891 |      5 |   2891 |00:00:00.01 |    5785 |
+|*  6 |     INDEX RANGE SCAN (MIN/MAX)| PK_T_SUJU_DTL   |   2891 |      5 |   2891 |00:00:00.01 |    5785 |
+-----------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   4 - access("B"."JUMUN_DT" LIKE '2007%')
+       filter("B"."JUMUN_DT" LIKE '2007%')
+   6 - access("A"."SUJU_NO"="B"."SUJU_NO")
+ 
+
+28개 행이 선택되었습니다. 
+
+----------------------
+
+SELECT /*+ gather_plan_statistics */ DEPT_NAME
+  FROM DEPTS
+ WHERE DEPT_NO IN ( SELECT DEPT_NO FROM EMPS );
+
+ select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));
+
+
+총무팀
+경리팀
+기획팀
+정보관리팀
+개발팀
+생산1팀
+디자인1팀
+
+7개 행이 선택되었습니다. 
+
+
+SQL_ID  1f1b6ym9rbk6m, child number 0
+-------------------------------------
+SELECT /*+ gather_plan_statistics */ DEPT_NAME   FROM DEPTS  WHERE 
+DEPT_NO IN ( SELECT DEPT_NO FROM EMPS )
+ 
+Plan hash value: 1377842349
+ 
+------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                    | Name     | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT             |          |      1 |        |      7 |00:00:00.01 |       8 |       |       |          |
+|   1 |  MERGE JOIN SEMI             |          |      1 |      7 |      7 |00:00:00.01 |       8 |       |       |          |
+|   2 |   TABLE ACCESS BY INDEX ROWID| DEPTS    |      1 |      9 |      9 |00:00:00.01 |       2 |       |       |          |
+|   3 |    INDEX FULL SCAN           | PK_DEPTS |      1 |      9 |      9 |00:00:00.01 |       1 |       |       |          |
+|*  4 |   SORT UNIQUE                |          |      9 |     45 |      7 |00:00:00.01 |       6 |  2048 |  2048 | 2048  (0)|
+|   5 |    TABLE ACCESS FULL         | EMPS     |      1 |     45 |     45 |00:00:00.01 |       6 |       |       |          |
+------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   4 - access("DEPT_NO"="DEPT_NO")
+       filter("DEPT_NO"="DEPT_NO")
+ 
+
+24개 행이 선택되었습니다. 
+
+
+----------------
+
+SEMI 는 체크하는 개념으로 처리 ( EXISTS와 동일 )
+
+
+----------------
+select /*+ gather_plan_statistics */ c1, c2, c3
+  from TMP2
+ where c1 >= 249990 and c1 <= 250210
+   and exists (select /*+ no_unnest*/ 'x' 
+                 from TMP1 
+                where TMP1.c6 = TMP2.c3 
+                  and TMP1.c6 >= 249990) ;
+                  
+ select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));   
+ 
+ 
+    249990 A      349989
+    249991 B      349990
+    249992 C      349991
+    249993 D      349992
+    249994 E      349993
+    249995 F      349994
+    249996 G      349995
+    249997 H      349996
+    249998 I      349997
+    249999 J      349998
+    250000 K      349999
+
+11개 행이 선택되었습니다. 
+
+
+SQL_ID  4u9w90y4yrz5n, child number 0
+-------------------------------------
+select /*+ gather_plan_statistics */ c1, c2, c3   from TMP2  where c1 
+>= 249990 and c1 <= 250210    and exists (select /*+ no_unnest*/ 'x'    
+               from TMP1                  where TMP1.c6 = TMP2.c3       
+             and TMP1.c6 >= 249990)
+ 
+Plan hash value: 1419143940
+ 
+--------------------------------------------------------------------------------------------------
+| Id  | Operation                    | Name    | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+--------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT             |         |      1 |        |     11 |00:00:00.07 |    7880K|
+|*  1 |  FILTER                      |         |      1 |        |     11 |00:00:00.07 |    7880K|
+|   2 |   TABLE ACCESS BY INDEX ROWID| TMP2    |      1 |    221 |    221 |00:00:00.01 |       6 |
+|*  3 |    INDEX RANGE SCAN          | PK_TMP2 |      1 |    221 |    221 |00:00:00.01 |       4 |
+|*  4 |   FILTER                     |         |    221 |        |     11 |00:01:30.54 |    7880K|
+|*  5 |    TABLE ACCESS FULL         | TMP1    |    221 |      1 |     11 |00:01:30.54 |    7880K|
+--------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter( IS NOT NULL)
+   3 - access("C1">=249990 AND "C1"<=250210)
+   4 - filter(249990<=:B1)
+   5 - filter(("TMP1"."C6"=:B1 AND "TMP1"."C6">=249990))
+ 
+Note
+-----
+   - dynamic statistics used: dynamic sampling (level=2)
+ 
+
+32개 행이 선택되었습니다. 
+
+----
+
+-- UNNEST / HASH_SJ ( SEMI JOIN으로 변경 )
+select /*+ gather_plan_statistics */ c1, c2, c3
+  from TMP2
+ where c1 >= 249990 and c1 <= 250210
+   and exists (select /*+ unnest*/ 'x' 
+                 from TMP1 
+                where TMP1.c6 = TMP2.c3 
+                  and TMP1.c6 >= 249990) ;
+                  
+select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));   
+
+
+    249990 A      349989
+    249991 B      349990
+    249992 C      349991
+    249993 D      349992
+    249994 E      349993
+    249995 F      349994
+    249996 G      349995
+    249997 H      349996
+    249998 I      349997
+    249999 J      349998
+    250000 K      349999
+
+11개 행이 선택되었습니다. 
+
+
+SQL_ID  d5zw0wmv2yqym, child number 0
+-------------------------------------
+select /*+ gather_plan_statistics */ c1, c2, c3   from TMP2  where c1 
+>= 249990 and c1 <= 250210    and exists (select /*+ unnest*/ 'x'       
+            from TMP1                  where TMP1.c6 = TMP2.c3          
+          and TMP1.c6 >= 249990)
+ 
+Plan hash value: 775342807
+ 
+-----------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                    | Name    | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+-----------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT             |         |      1 |        |     11 |00:00:00.01 |   37499 |       |       |          |
+|*  1 |  HASH JOIN SEMI              |         |      1 |    155 |     11 |00:00:00.01 |   37499 |  1695K|  1695K| 1597K (0)|
+|*  2 |   TABLE ACCESS BY INDEX ROWID| TMP2    |      1 |    155 |    221 |00:00:00.01 |       6 |       |       |          |
+|*  3 |    INDEX RANGE SCAN          | PK_TMP2 |      1 |    222 |    221 |00:00:00.01 |       4 |       |       |          |
+|*  4 |   TABLE ACCESS FULL          | TMP1    |      1 |   6400K|   6400K|00:00:00.29 |   37493 |       |       |          |
+-----------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - access("TMP1"."C6"="TMP2"."C3")
+   2 - filter("TMP2"."C3">=249990)
+   3 - access("C1">=249990 AND "C1"<=250210)
+   4 - filter("TMP1"."C6">=249990)
+ 
+
+27개 행이 선택되었습니다. 
+
+
+----
+
+-- INDEX 추가 생성
+CREATE INDEX TMP2_IDX03 ON TMP1(C6);
+
+-- INDEX 사용/사용안 하도록 변경
+	ALTER INDEX TMP2_IDX03 INVISIBLE;
+	ALTER INDEX TMP2_IDX03 VISIBLE;
+
+
+
+-- INDEX 생성하여 no_unnest 처리 
+select /*+ gather_plan_statistics */ c1, c2, c3
+  from TMP2
+ where c1 >= 249990 and c1 <= 250210
+   and exists (select /*+ no_unnest*/ 'x' 
+                 from TMP1 
+                where TMP1.c6 = TMP2.c3 
+                  and TMP1.c6 >= 249990) ;
+                  
+select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));  
+
+    249990 A      349989
+    249991 B      349990
+    249992 C      349991
+    249993 D      349992
+    249994 E      349993
+    249995 F      349994
+    249996 G      349995
+    249997 H      349996
+    249998 I      349997
+    249999 J      349998
+    250000 K      349999
+
+11개 행이 선택되었습니다. 
+
+
+SQL_ID  4u9w90y4yrz5n, child number 0
+-------------------------------------
+select /*+ gather_plan_statistics */ c1, c2, c3   from TMP2  where c1 
+>= 249990 and c1 <= 250210    and exists (select /*+ no_unnest*/ 'x'    
+               from TMP1                  where TMP1.c6 = TMP2.c3       
+             and TMP1.c6 >= 249990)
+ 
+Plan hash value: 3969699238
+ 
+-----------------------------------------------------------------------------------------------------
+| Id  | Operation                    | Name       | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+-----------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT             |            |      1 |        |     11 |00:00:00.01 |     254 |
+|*  1 |  FILTER                      |            |      1 |        |     11 |00:00:00.01 |     254 |
+|   2 |   TABLE ACCESS BY INDEX ROWID| TMP2       |      1 |    222 |    221 |00:00:00.01 |       6 |
+|*  3 |    INDEX RANGE SCAN          | PK_TMP2    |      1 |    222 |    221 |00:00:00.01 |       4 |
+|*  4 |   FILTER                     |            |    221 |        |     11 |00:00:00.01 |     248 |
+|*  5 |    INDEX RANGE SCAN          | TMP2_IDX03 |    221 |      1 |     11 |00:00:00.01 |     248 |
+-----------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter( IS NOT NULL)
+   3 - access("C1">=249990 AND "C1"<=250210)
+   4 - filter(249990<=:B1)
+   5 - access("TMP1"."C6"=:B1)
+       filter("TMP1"."C6">=249990)
+ 
+
+29개 행이 선택되었습니다. 
+
+----
+
+-- INDEX 사용 및 unnest 
+select /*+ gather_plan_statistics */ c4, c5, c6
+  from TMP1
+ where c6 >= 1 and c6 <= 450210
+   and exists (select /*+ unnest*/ 'x' 
+                 from TMP2 
+                where TMP2.c1 = TMP1.c4 
+                  and TMP2.c3 >= 100000 
+                  and TMP2.c3 <= 100004 )
+;
+select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));                  
+
+
+SQL_ID  fv2yqsptwpzy9, child number 0
+-------------------------------------
+select /*+ gather_plan_statistics */ c4, c5, c6   from TMP1  where c6 
+>= 1 and c6 <= 450210    and exists (select /*+ unnest*/ 'x'            
+       from TMP2                  where TMP2.c1 = TMP1.c4               
+     and TMP2.c3 >= 100000                    and TMP2.c3 <= 100004 )
+ 
+Plan hash value: 1125317806
+ 
+--------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                    | Name       | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+--------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT             |            |      1 |        |    320 |00:00:00.01 |    1648 |       |       |          |
+|   1 |  NESTED LOOPS                |            |      1 |        |    320 |00:00:00.01 |    1648 |       |       |          |
+|   2 |   NESTED LOOPS               |            |      1 |    320 |    320 |00:00:00.01 |    1328 |       |       |          |
+|   3 |    SORT UNIQUE               |            |      1 |      5 |      5 |00:00:00.01 |    1315 |  2048 |  2048 | 2048  (0)|
+|*  4 |     TABLE ACCESS FULL        | TMP2       |      1 |      5 |      5 |00:00:00.01 |    1315 |       |       |          |
+|*  5 |    INDEX RANGE SCAN          | TMP1_IDX01 |      5 |     64 |    320 |00:00:00.01 |      13 |       |       |          |
+|*  6 |   TABLE ACCESS BY INDEX ROWID| TMP1       |    320 |     64 |    320 |00:00:00.01 |     320 |       |       |          |
+--------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   4 - filter(("TMP2"."C3"<=100004 AND "TMP2"."C3">=100000))
+   5 - access("TMP2"."C1"="TMP1"."C4")
+   6 - filter(("C6">=1 AND "C6"<=450210))
+ 
+
+28개 행이 선택되었습니다. 
+
+
+----- 
+
+select /*+ gather_plan_statistics */ c4, c5, c6
+  from TMP1
+ where c6 >= 1 and c6 <= 450210
+   and exists (select /*+ unnest HASH_SJ */ 'x' 
+                 from TMP2 
+                where TMP2.c1 = TMP1.c4 
+                  and TMP2.c3 >= 100000 
+                  and TMP2.c3 <= 100004 )
+;
+select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));                  
+
+
+
+SQL_ID  091b6vhjft0ya, child number 0
+-------------------------------------
+select /*+ gather_plan_statistics */ c4, c5, c6   from TMP1  where c6 
+>= 1 and c6 <= 450210    and exists (select /*+ unnest HASH_SJ */ 'x'   
+                from TMP2                  where TMP2.c1 = TMP1.c4      
+              and TMP2.c3 >= 100000                    and TMP2.c3 <= 
+100004 )
+ 
+Plan hash value: 312790733
+ 
+------------------------------------------------------------------------------------------------------------------
+| Id  | Operation            | Name | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT     |      |      1 |        |    320 |00:00:00.63 |   38809 |       |       |          |
+|*  1 |  HASH JOIN RIGHT SEMI|      |      1 |    320 |    320 |00:00:00.63 |   38809 |  2546K|  2546K|  997K (0)|
+|*  2 |   TABLE ACCESS FULL  | TMP2 |      1 |      5 |      5 |00:00:00.01 |    1315 |       |       |          |
+|*  3 |   TABLE ACCESS FULL  | TMP1 |      1 |     16M|     16M|00:00:00.41 |   37494 |       |       |          |
+------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - access("TMP2"."C1"="TMP1"."C4")
+   2 - filter(("TMP2"."C3"<=100004 AND "TMP2"."C3">=100000))
+   3 - filter(("C6">=1 AND "C6"<=450210))
+ 
+ 
+----
+
+-- 순서 변경 제거 NO_SWAP_JOIN_INPUTS
+select /*+ gather_plan_statistics */ c4, c5, c6
+  from TMP1
+ where c6 >= 1 and c6 <= 450210
+   and exists (select /*+ unnest HASH_SJ 
+(TMP2) */ 'x' 
+                 from TMP2 
+                where TMP2.c1 = TMP1.c4 
+                  and TMP2.c3 >= 100000 
+                  and TMP2.c3 <= 100004 )
+;
+select * from table(dbms_xplan.display_cursor(format=>'ALLSTATS LAST'));     
+
+ 
+Plan hash value: 1900075249
+ 
+--------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation          | Name | Starts | E-Rows | A-Rows |   A-Time   | Buffers | Reads  | Writes |  OMem |  1Mem | Used-Mem | Used-Tmp|
+--------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT   |      |      1 |        |    320 |00:00:05.59 |   38808 |  17608 |  42315 |       |       |          |         |
+|*  1 |  HASH JOIN SEMI    |      |      1 |    320 |    320 |00:00:05.59 |   38808 |  17608 |  42315 |   882M|    35M|  765M (1)|     348M|
+|*  2 |   TABLE ACCESS FULL| TMP1 |      1 |     16M|     16M|00:00:00.45 |   37493 |      0 |      0 |       |       |          |         |
+|*  3 |   TABLE ACCESS FULL| TMP2 |      1 |      5 |      5 |00:00:00.01 |    1315 |      0 |      0 |       |       |          |         |
+--------------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - access("TMP2"."C1"="TMP1"."C4")
+   2 - filter(("C6">=1 AND "C6"<=450210))
+   3 - filter(("TMP2"."C3"<=100004 AND "TMP2"."C3">=100000))
+ 
+ 
+ 
+----------------
+
+NO_UNNEST 사용이 유리한 경우
+	1. main 값이 적을 때
+	2. main 많더라도 중복 값이 많을 때
+
+ 
+ ------------
+ 
+ 
+
+SELECT /*+ gather_plan_statistics */
+      A.CUST_ID, 
+      A.CUST_NM, 
+      B.CUST_ID, 
+      B.SEQ, 
+      B.CUST_INFO
+FROM 
+      TB_CUST A, 
+      TB_CUST_DTL B
+WHERE A.CUST_NM LIKE 'A%' 
+  AND A.CUST_ID = B.CUST_ID
+  AND EXISTS ( SELECT /*+ no_unnest */ 'x'  
+                 FROM TB_ORD C 
+                WHERE C.CUST_ID = B.CUST_ID 
+                  AND C.ORD_DT LIKE '2015%' )
+GROUP BY 
+      A.CUST_ID, 
+      A.CUST_NM, 
+      B.CUST_ID, 
+      B.SEQ, 
+      B.CUST_INFO;
+
+select * from table(dbms_xplan.display_cursor(null, null, 'ALLSTATS LAST'));
+  
+
+ 
+-------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                             | Name         | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+-------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                      |              |      1 |        |   5050 |00:00:00.16 |   62013 |       |       |          |
+|   1 |  HASH GROUP BY                        |              |      1 |      1 |   5050 |00:00:00.16 |   62013 |  5891K|  2194K|          |
+|*  2 |   FILTER                              |              |      1 |        |  37910 |00:00:00.17 |   62013 |       |       |          |
+|*  3 |    HASH JOIN                          |              |      1 |  29354 |  38190 |00:00:00.15 |   10660 |  1150K|  1150K| 1523K (0)|
+|*  4 |     TABLE ACCESS FULL                 | TB_CUST      |      1 |   2969 |   3819 |00:00:00.03 |     940 |       |       |          |
+|   5 |     TABLE ACCESS FULL                 | TB_CUST_DTL  |      1 |   1000K|   1000K|00:00:00.06 |    9720 |       |       |          |
+|*  6 |    TABLE ACCESS BY INDEX ROWID BATCHED| TB_ORD       |   4007 |      1 |   3977 |00:00:00.05 |   51353 |       |       |          |
+|*  7 |     INDEX RANGE SCAN                  | TB_ORD_IDX01 |   4007 |     49 |  39215 |00:00:00.01 |   12138 |       |       |          |
+-------------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   2 - filter( IS NOT NULL)
+   3 - access("A"."CUST_ID"="B"."CUST_ID")
+   4 - filter("A"."CUST_NM" LIKE 'A%')
+   6 - filter("C"."ORD_DT" LIKE '2015%')
+   7 - access("C"."CUST_ID"=:B1)
+ 	  
+	  
+---
+
+-- 스칼라 서브쿼리
+
+select /*+ gather_plan_statistics */
+       rownum rnum,   x.*, 
+       ( select t2.c3 from TMP2 t2 where t2.c1 = x.c1) t2_c3 
+ from ( select c1, c2, c3 
+          from TMP1 t1 
+        order by c1, c2 ) x
+where rownum <= 10   ;
+
+select * from table(dbms_xplan.display_cursor(null, null, 'ALLSTATS LAST'));
+
+---------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                           | Name       | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+---------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                    |            |      1 |        |     10 |00:00:00.04 |    1177 |       |       |          |
+|   1 |  TABLE ACCESS BY INDEX ROWID BATCHED| TMP2       |     10 |      1 |     10 |00:00:00.01 |      14 |       |       |          |
+|*  2 |   INDEX RANGE SCAN                  | TMP2_IDX01 |     10 |      1 |     10 |00:00:00.01 |      13 |       |       |          |
+|*  3 |  COUNT STOPKEY                      |            |      1 |        |     10 |00:00:00.04 |    1177 |       |       |          |
+|   4 |   VIEW                              |            |      1 |    500K|     10 |00:00:00.04 |    1177 |       |       |          |
+|*  5 |    SORT ORDER BY STOPKEY            |            |      1 |    500K|     10 |00:00:00.04 |    1177 |  2048 |  2048 | 2048  (0)|
+|   6 |     TABLE ACCESS FULL               | TMP1       |      1 |    500K|    500K|00:00:00.01 |    1177 |       |       |          |
+---------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   2 - access("T2"."C1"=:B1)
+   3 - filter(ROWNUM<=10)
+   5 - filter(ROWNUM<=10)
+ 
+
+
+==========
+
+-- 스칼라 서브쿼리 성능 개선 전
+SELECT /*+ gather_plan_statistics */ T1.C1, T1.C2, T1.C3,
+       (SELECT T2.C3 FROM TMP2 T2 WHERE T2.C1 = T1.C1) T2_C3,    -- 스칼라 서브쿼리 사용
+       (SELECT T3.C3 FROM TMP3 T3 WHERE T3.C1 = T1.C1) T3_C3     -- 스칼라 서브쿼리 사용
+  FROM TMP1 T1
+ORDER BY T1.C1, T1.C2;
+
+
+---------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                           | Name       | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+---------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                    |            |      1 |        |   5050 |00:00:01.23 |   29876 |       |       |          |
+|   1 |  TABLE ACCESS BY INDEX ROWID BATCHED| TMP2       |    500K|      1 |    500K|00:00:00.46 |   14310 |       |       |          |
+|*  2 |   INDEX RANGE SCAN                  | TMP2_IDX01 |    500K|      1 |    500K|00:00:00.26 |   13357 |       |       |          |
+|   3 |  TABLE ACCESS BY INDEX ROWID BATCHED| TMP3       |    500K|      1 |    500K|00:00:00.44 |   14388 |       |       |          |
+|*  4 |   INDEX RANGE SCAN                  | TMP3_IDX01 |    500K|      1 |    500K|00:00:00.26 |   13359 |       |       |          |
+|   5 |  SORT ORDER BY                      |            |      1 |    500K|   5050 |00:00:01.23 |   29876 |    21M|  1709K|   19M (0)|
+|   6 |   TABLE ACCESS FULL                 | TMP1       |      1 |    500K|    500K|00:00:00.03 |    1178 |       |       |          |
+---------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   2 - access("T2"."C1"=:B1)
+   4 - access("T3"."C1"=:B1)
+ 
+
+-- 스칼라 서브쿼리 성능 개선 후
+-- Outer Join 사용 필요!!! (null 인 경우 누락 방지)
+SELECT /*+ gather_plan_statistics */
+        T1.C1, T1.C2, T1.C3, T2.C3, T3.C3
+  FROM  TMP1 T1, 
+        TMP2 T2, 
+        TMP3 T3 
+ WHERE  T1.C1 = T2.C1(+)
+   AND  T1.C1 = T3.C1(+)
+ ORDER  BY T1.C1, T1.C2;
+
+select * from table(dbms_xplan.display_cursor(null, null, 'ALLSTATS LAST'));
+
+ 
+---------------------------------------------------------------------------------------------------------------------
+| Id  | Operation               | Name | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+---------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT        |      |      1 |        |   5050 |00:00:00.17 |    3166 |       |       |          |
+|   1 |  SORT ORDER BY          |      |      1 |    500K|   5050 |00:00:00.17 |    3166 |    21M|  1709K|   19M (0)|
+|*  2 |   HASH JOIN RIGHT OUTER |      |      1 |    500K|    500K|00:00:00.14 |    3166 |    27M|  5317K|   26M (0)|
+|   3 |    TABLE ACCESS FULL    | TMP3 |      1 |    500K|    500K|00:00:00.01 |    1032 |       |       |          |
+|*  4 |    HASH JOIN RIGHT OUTER|      |      1 |    500K|    500K|00:00:00.08 |    2134 |    26M|  5537K|   26M (0)|
+|   5 |     TABLE ACCESS FULL   | TMP2 |      1 |    500K|    500K|00:00:00.01 |     957 |       |       |          |
+|   6 |     TABLE ACCESS FULL   | TMP1 |      1 |    500K|    500K|00:00:00.01 |    1177 |       |       |          |
+---------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   2 - access("T1"."C1"="T3"."C1")
+   4 - access("T1"."C1"="T2"."C1")
+ 
+
+---------------
+
+-- FUNCTION 사용
+
+	- SQL_TRACE로 수행로그 확인가능
+		alter session set sql_trace=true;	  
+
+	- FUNCTION 은 수행되는 ROW 및 COLUMN 개수 만큼 수행 ( CALL 하는 만큼 수행됨 )
+
+
+SELECT /*+ gather_plan_statistics */ 
+        C1, FN_C1_CODENM(C1) C2, C3
+  FROM  FUNCTION_TABLE;
+  
+	
+SELECT /*+  gather_plan_statistics  */ EMP_NAME , SAL , HIRE_DATE ,  HIRE_YEAR , HIRE_YEAR HIRE_YEAR2 , HIRE_YEAR HIRE_YEAR3
+ FROM ( 
+  SELECT   EMP_NAME , SAL , HIRE_DATE 
+  ,  (SELECT ROUND((SYSDATE-HIRE_DATE)/365,0) V_YEAR FROM EMPS WHERE EMP_NO = x.emp_no  ) HIRE_YEAR
+    FROM EMPS x
+   WHERE SAL <= 50000 
+) ;
+select * from table(dbms_xplan.display_cursor(null, null, 'ALLSTATS LAST'));	
+
+
+-- 스칼라 서브쿼리는 캐싱되기 때문에 function 중복 수행 방지 가능!!!!
+SELECT /*+  gather_plan_statistics  */ EMP_NAME , SAL , HIRE_DATE ,  HIRE_YEAR , HIRE_YEAR HIRE_YEAR2 , HIRE_YEAR HIRE_YEAR3
+ FROM ( 
+  SELECT   EMP_NAME , SAL , HIRE_DATE 
+  ,  (SELECT FUNCTION(x.emp_no) from dual ) HIRE_YEAR
+    FROM EMPS x
+   WHERE SAL <= 50000 
+) ;
+select * from table(dbms_xplan.display_cursor(null, null, 'ALLSTATS LAST'));	
+
+
+-- 스칼라 서브쿼리 사용이 유리할 때
+	1. 매인 건수 적을 때
+	2. 메인 건수 많아도 input 이 중복이 많을 때 ( 캐싱 )
+
+
+
+
+-- VIEW 실습
+CREATE OR REPLACE VIEW VU_EMP_DEPT30
+AS
+    SELECT EMP_NAME, HIRE_DATE, SAL, DEPT_NO
+      FROM EMPS
+     WHERE DEPT_NO = 30;
+     
+CREATE INDEX EMP_HIRE_DT_IDX02 ON EMPS(HIRE_DATE);   
+
+SELECT /*+  gather_plan_statistics  */ *
+  FROM VU_EMP_DEPT30
+ WHERE HIRE_DATE BETWEEN TO_DATE('20090101', 'YYYYMMDD') AND TO_DATE('20100101', 'YYYYMMDD')
+ ;
+ 
+SELECT /*+  gather_plan_statistics  */ *
+  FROM VU_EMP_DEPT30
+ WHERE HIRE_DATE BETWEEN '20090101' AND '20100101'
+ ;
+  
+select * from table(dbms_xplan.display_cursor(null, null, 'ALLSTATS LAST'));
